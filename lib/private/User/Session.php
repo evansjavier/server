@@ -933,6 +933,10 @@ class Session implements IUserSession, Emitter {
 	 * @param string $token
 	 */
 	public function setMagicInCookie($username, $token) {
+
+		// Se guarda en global nuevo token
+		$GLOBALS['nc_token_backup'] = $token;
+
 		$secureCookie = OC::$server->getRequest()->getServerProtocol() === 'https';
 		$webRoot = \OC::$WEBROOT;
 		if ($webRoot === '') {

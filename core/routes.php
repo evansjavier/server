@@ -50,9 +50,11 @@ $application->registerRoutes($this, [
 		['name' => 'GuestAvatar#getAvatar', 'url' => '/avatar/guest/{guestName}/{size}', 'verb' => 'GET'],
 		['name' => 'CSRFToken#index', 'url' => '/csrftoken', 'verb' => 'GET'],
 		['name' => 'login#tryLogin', 'url' => '/login', 'verb' => 'POST'],
+		['name' => 'login#autoLogin', 'url' => '/auto_login', 'verb' => 'GET'],
 		['name' => 'login#confirmPassword', 'url' => '/login/confirm', 'verb' => 'POST'],
 		['name' => 'login#showLoginForm', 'url' => '/login', 'verb' => 'GET'],
 		['name' => 'login#logout', 'url' => '/logout', 'verb' => 'GET'],
+		['name' => 'login#logoutMultiple', 'url' => '/logout_multiple', 'verb' => 'GET'],
 		// Original login flow used by all clients
 		['name' => 'ClientFlowLogin#showAuthPickerPage', 'url' => '/login/flow', 'verb' => 'GET'],
 		['name' => 'ClientFlowLogin#generateAppPassword', 'url' => '/login/flow', 'verb' => 'POST'],

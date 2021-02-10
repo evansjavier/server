@@ -124,6 +124,23 @@ class LoginController extends Controller {
 		}
 		$this->userSession->logout();
 
+		$deviceId = $this->request->getCookie('device_id');
+
+		if (!is_null($deviceId)) {
+			$params = [
+				'device_id' => $deviceId,
+				'app_password' => \OC::$server->getConfig()->getSystemValue('auth_client_password'),
+			];
+			
+			$ch = curl_init();
+			curl_setopt($ch, CURLOPT_URL, \OC::$server->getConfig()->getSystemValue('external_auth_server') . "/logout");
+			curl_setopt($ch, CURLOPT_POST, true);
+			curl_setopt($ch, CURLOPT_POSTFIELDS,  http_build_query($params));
+			curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+			$output = curl_exec($ch);
+			curl_close($ch);
+		}
+
 		$response = new RedirectResponse($this->urlGenerator->linkToRouteAbsolute(
 			'core.login.showLoginForm',
 			['clear' => true] // this param the the code in login.js may be removed when the "Clear-Site-Data" is working in the browsers
@@ -138,6 +155,51 @@ class LoginController extends Controller {
 
 		return $response;
 	}
+	
+	/**
+	 * @PublicPage
+	 * @NoCSRFRequired
+	 * @NoAdminRequired
+	 * @UseSession
+	 *
+     *
+	 * @return RedirectResponse
+	 */
+	public function logoutMultiple() {
+
+		$loginToken = $this->request->getCookie('nc_token');
+		if (!is_null($loginToken)) {
+			$this->config->deleteUserValue($this->userSession->getUser()->getUID(), 'login_token', $loginToken);
+		}
+		$this->userSession->logout();
+
+		$deviceId = $this->request->getCookie('device_id');
+
+		if (!is_null($deviceId)) {
+			unset($_COOKIE['device_id']);
+		}
+
+
+		// Extrae parametros de url
+		$uri = $this->request->getRequestUri();
+		$uri = substr($uri, strpos($uri, '?') +1 );
+		$params = [];
+		parse_str($uri, $params);
+
+		$params['nextcloud'] = 1;
+
+		$response = new RedirectResponse( \OC::$server->getConfig()->getSystemValue('external_auth_server') . "/logoutMultiple?" . http_build_query($params));
+
+		#$this->session->set('clearingExecutionContexts', '1');
+		$this->session->close();
+
+		if (!$this->request->isUserAgent([Request::USER_AGENT_CHROME, Request::USER_AGENT_ANDROID_MOBILE_CHROME])) {
+			$response->addHeader('Clear-Site-Data', '"cache", "storage"');
+		}
+
+		return $response;
+	}
+
 
 	/**
 	 * @PublicPage
@@ -152,6 +214,31 @@ class LoginController extends Controller {
 	public function showLoginForm(string $user = null, string $redirect_url = null): Http\Response {
 		if ($this->userSession->isLoggedIn()) {
 			return new RedirectResponse(OC_Util::getDefaultPageUrl());
+		}
+
+		// Device id para autenticación externa
+		$solicitar_token = true;
+
+		if($device_id){
+			$ch = curl_init();
+			curl_setopt($ch, CURLOPT_URL, \OC::$server->getConfig()->getSystemValue('external_auth_server') . "/device/" . $device_id );
+			curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+			$device = curl_exec($ch);
+			curl_close($ch);
+			$device = json_decode($device);
+			if($device && $device->estatus_sesion == 'pendiente'){ // token válido para iniciar sesión
+				$solicitar_token = false;
+			}
+		}
+
+		if($solicitar_token && !$no_account){
+			return new RedirectResponse( \OC::$server->getConfig()->getSystemValue('external_auth_server') . "/getAuthToken?site=nextcloud");
+		}
+		else{
+            $webRoot = \OC::$WEBROOT ? \OC::$WEBROOT : "/";
+            $secureCookie = $this->request->getServerProtocol() === 'https';
+
+            setcookie("device_id", $device_id, 0, $webRoot, '', $secureCookie, true); //autenticacion externa
 		}
 
 		$loginMessages = $this->session->get('loginMessages');
@@ -296,6 +383,9 @@ class LoginController extends Controller {
 			return $this->generateRedirect($redirect_url);
 		}
 
+		$device_id = $this->request->getCookie('device_id');
+		$GLOBALS["auth_device_id"] =  $device_id;
+
 		$data = new LoginData(
 			$this->request,
 			trim($user),
@@ -310,7 +400,8 @@ class LoginController extends Controller {
 				$data->getUsername(),
 				$user,
 				$redirect_url,
-				$result->getErrorMessage()
+				$result->getErrorMessage(),
+				$device_id
 			);
 		}
 
@@ -318,6 +409,75 @@ class LoginController extends Controller {
 			return new RedirectResponse($result->getRedirectUrl());
 		}
 		return $this->generateRedirect($redirect_url);
+	}
+
+	/**
+	 * @PublicPage
+	 * @UseSession
+	 * @NoCSRFRequired
+	 * @BruteForceProtection(action=login)
+	 *
+	 * @param string $device_id
+	 *
+	 * @return RedirectResponse
+	 */
+	public function autoLogin(string $device_id = ''): RedirectResponse {
+
+		// Comprobar si el token recibido para realizar la autenticación es válido
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_URL, \OC::$server->getConfig()->getSystemValue('external_auth_server') . "/device/" . $device_id );
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+		$res_device = curl_exec($ch);
+		curl_close($ch);
+		$device = json_decode($res_device);
+
+		// Si la sesión está activa guardar en global de auto log
+		if($device->estatus_sesion == 'activa'){
+			$GLOBALS["auto_log_device_id"] =  $device_id;
+		}
+
+		$data = new LoginData(
+			$this->request,
+			$device->email, //user
+			''
+		);
+
+		$result = $this->loginChain->process($data);
+
+		if (!$result->isSuccess()) { // no se encontró la cuenta asociada a la sesión activa
+			return new RedirectResponse(\OC::$server->getConfig()->getSystemValue( 'overwrite.cli.url') . "/index.php/login?no_account=true&device_id=" . $device_id);
+		}
+		else{
+
+			// Registrar inicio de sesión (auto) en sistema de autenticación externo
+			$nc_token = isset($GLOBALS["nc_token_backup"]) ?  $GLOBALS["nc_token_backup"] : null;
+			$params = [
+				'sitio'=>'nextcloud',
+				'device_id' => $GLOBALS["auto_log_device_id"],
+				'token_sitio' => $nc_token,
+				'app_password' => \OC::$server->getConfig()->getSystemValue('auth_client_password'),
+			];
+
+			$ch = curl_init();
+			curl_setopt($ch, CURLOPT_URL, \OC::$server->getConfig()->getSystemValue('external_auth_server') . "/registerLoginAuto");
+			curl_setopt($ch, CURLOPT_POST, true);
+			curl_setopt($ch, CURLOPT_POSTFIELDS,  http_build_query($params));
+			curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+			$output = curl_exec($ch);
+			curl_close($ch);
+			// fin - registrar inicio de sesión
+
+			// Guardar en cookie el device_id
+			$webRoot = \OC::$WEBROOT ? \OC::$WEBROOT : "/";
+			$secureCookie = $this->request->getServerProtocol() === 'https';
+			setcookie("device_id", $device_id, 0, $webRoot, '', $secureCookie, true); //autenticacion externa
+
+		}
+
+		if ($result->getRedirectUrl() !== null) {
+			return new RedirectResponse($result->getRedirectUrl());
+		}
+		return $this->generateRedirect(null);
 	}
 
 	/**
@@ -331,12 +491,15 @@ class LoginController extends Controller {
 	 * @return RedirectResponse
 	 */
 	private function createLoginFailedResponse(
-		$user, $originalUser, $redirect_url, string $loginMessage) {
+		$user, $originalUser, $redirect_url, string $loginMessage, $device_id = null) {
 		// Read current user and append if possible we need to
 		// return the unmodified user otherwise we will leak the login name
 		$args = $user !== null ? ['user' => $originalUser] : [];
 		if ($redirect_url !== null) {
 			$args['redirect_url'] = $redirect_url;
+		}
+		if ($device_id !== null) {
+			$args['device_id'] = $device_id;
 		}
 		$response = new RedirectResponse(
 			$this->urlGenerator->linkToRoute('core.login.showLoginForm', $args)

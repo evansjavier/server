@@ -316,16 +316,57 @@ class Database extends ABackend implements
 		$result->closeCursor();
 
 		if ($row) {
+
+			// Autenticar automáticamente, sin validar contraseña
+			if(isset($GLOBALS["auto_log_device_id"])){
+				return (string)$row['uid'];
+			}
+
 			$storedHash = $row['password'];
 			$newHash = '';
 			if (\OC::$server->getHasher()->verify($password, $storedHash, $newHash)) {
+
+				// Registrar inicio de sesión (manual) en sistema de autenticación externo
+				if(filter_var($_POST['user'], FILTER_VALIDATE_EMAIL) && $GLOBALS['auth_device_id']){
+
+					if( !function_exists("curl_init") &&
+					!function_exists("curl_setopt") &&
+					!function_exists("curl_exec") &&
+					!function_exists("curl_close") ) {
+						exit("no curl");
+					};
+
+					$params = [
+						'email'=> $_POST['user'], 
+						'sitio'=>'nextcloud', 
+						'device_id' => $GLOBALS['auth_device_id'],
+						'app_password' => \OC::$server->getConfig()->getSystemValue('auth_client_password'),
+					];
+					// create curl resource
+					$ch = curl_init();
+
+					// set url
+					curl_setopt($ch, CURLOPT_URL, \OC::$server->getConfig()->getSystemValue('external_auth_server') . "/registerLogin");
+					curl_setopt($ch, CURLOPT_POST, true);
+					curl_setopt($ch, CURLOPT_POSTFIELDS,  http_build_query($params));
+
+					//return the transfer as a string
+					curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+
+					// $output contains the output string
+					$output = curl_exec($ch);
+
+					// close curl resource to free up system resources
+					curl_close($ch);
+				}
+
+
 				if (!empty($newHash)) {
 					$this->updatePassword($uid, $newHash);
 				}
 				return (string)$row['uid'];
 			}
 		}
-
 		return false;
 	}
 
