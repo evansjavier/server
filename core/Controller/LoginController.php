@@ -211,7 +211,7 @@ class LoginController extends Controller {
 	 *
 	 * @return TemplateResponse|RedirectResponse
 	 */
-	public function showLoginForm(string $user = null, string $redirect_url = null): Http\Response {
+	public function showLoginForm(string $user = null, string $redirect_url = null, string $device_id = null, string $no_account = null): Http\Response { 
 		if ($this->userSession->isLoggedIn()) {
 			return new RedirectResponse(OC_Util::getDefaultPageUrl());
 		}
